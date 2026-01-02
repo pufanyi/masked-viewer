@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inference Results Viewer</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="data.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            background-color: #f5f5f5;
+        }
+
+        #sidebar {
+            width: 300px;
+            background-color: #fff;
+            border-right: 1px solid #ddd;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        #main {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        h1,
+        h2,
+        h3 {
+            margin-top: 0;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        select {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+        }
+
+        .card {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        #chart-container {
+            height: 400px;
+        }
+
+        #details-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .text-block {
+            white-space: pre-wrap;
+            background: #f9f9f9;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #eee;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+
+        .image-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .image-item {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .image-item img {
+            display: block;
+            max-width: 200px;
+            height: auto;
+        }
+
+        .image-item span {
+            display: block;
+            text-align: center;
+            padding: 4px;
+            font-size: 12px;
+            background: #eee;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="sidebar">
+        <h2>Controls</h2>
+        <div class="control-group">
+            <label for="experiment-select">Experiment:</label>
+            <select id="experiment-select"></select>
+        </div>
+        <div class="control-group">
+            <label for="scene-select">Scene:</label>
+            <select id="scene-select"></select>
+        </div>
+    </div>
+
+    <div id="main">
+        <div class="card">
+            <h2>Loss Curves</h2>
+            <div id="chart-container"></div>
+        </div>
+
+        <div class="card">
+            <h3>Ground Truth Caption</h3>
+            <div id="gt-caption" class="text-block"></div>
+        </div>
+
+        <div id="selection-details" class="card hidden">
+            <h3 id="selection-title">Selected Point Details</h3>
+            <div id="details-container">
+                <div>
+                    <h4>Generated Text</h4>
+                    <div id="generated-text" class="text-block"></div>
+                </div>
+                <div>
+                    <h4>Masked Images</h4>
+                    <div id="masked-images" class="image-grid"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const experimentSelect = document.getElementById('experiment-select');
+        const sceneSelect = document.getElementById('scene-select');
+        const chartContainer = document.getElementById('chart-container');
+        const gtCaptionDiv = document.getElementById('gt-caption');
+        const selectionDetails = document.getElementById('selection-details');
+        const selectionTitle = document.getElementById('selection-title');
+        const generatedTextDiv = document.getElementById('generated-text');
+        const maskedImagesDiv = document.getElementById('masked-images');
+
+        let currentExperiment = null;
+        let currentScene = null;
+
+        function init() {
+            if (!window.EXPERIMENT_DATA) {
+                alert("No data found! Make sure data.js is loaded.");
+                return;
+            }
+
+            // Populate Experiment Select
+            const experiments = Object.keys(window.EXPERIMENT_DATA).sort();
+            experiments.forEach(exp => {
+                const option = document.createElement('option');
+                option.value = exp;
+                option.textContent = exp;
+                experimentSelect.appendChild(option);
+            });
+
+            if (experiments.length > 0) {
+                experimentSelect.value = experiments[0];
+                loadExperiment(experiments[0]);
+            }
+
+            experimentSelect.addEventListener('change', (e) => {
+                loadExperiment(e.target.value);
+            });
+
+            sceneSelect.addEventListener('change', (e) => {
+                loadScene(e.target.value);
+            });
+        }
+
+        function loadExperiment(expName) {
+            currentExperiment = window.EXPERIMENT_DATA[expName];
+
+            // Populate Scene Select
+            sceneSelect.innerHTML = '';
+            const scenes = Object.keys(currentExperiment).sort();
+            scenes.forEach(scene => {
+                const option = document.createElement('option');
+                option.value = scene;
+                // Show basename for readability
+                option.textContent = scene.split('/').pop();
+                sceneSelect.appendChild(option);
+            });
+
+            if (scenes.length > 0) {
+                sceneSelect.value = scenes[0];
+                loadScene(scenes[0]);
+            } else {
+                // Clear view if no scenes
+                chartContainer.innerHTML = '';
+                gtCaptionDiv.textContent = '';
+                selectionDetails.classList.add('hidden');
+            }
+        }
+
+        function loadScene(sceneKey) {
+            currentScene = currentExperiment[sceneKey];
+            const sceneName = sceneKey.split('/').pop();
+
+            // Display GT Caption
+            gtCaptionDiv.textContent = currentScene.gt_caption || "No GT Caption available.";
+
+            // Prepare Chart Data
+            const results = currentScene.results;
+            const traces = [];
+
+            // results structure: { num_frames: { num_blocks: { loss, generated_text } } }
+            const frameCounts = Object.keys(results).sort((a, b) => parseInt(a) - parseInt(b));
+
+            frameCounts.forEach(numFrames => {
+                const blocksData = results[numFrames];
+                const blocks = Object.keys(blocksData).sort((a, b) => parseInt(a) - parseInt(b));
+                const losses = blocks.map(b => blocksData[b].loss);
+
+                // Store metadata for click events
+                const textData = blocks.map(b => blocksData[b].generated_text);
+                const customData = blocks.map(b => ({
+                    numFrames: numFrames,
+                    numBlocks: b,
+                    sceneName: sceneName
+                }));
+
+                traces.push({
+                    x: blocks,
+                    y: losses,
+                    mode: 'lines+markers',
+                    name: `${numFrames} Frames`,
+                    customdata: customData
+                });
+            });
+
+            const layout = {
+                title: `Sequence CE Loss vs Masked Blocks - ${sceneName}`,
+                xaxis: { title: 'Number of Masked Blocks' },
+                yaxis: { title: 'Cross Entropy Loss' },
+                hovermode: 'closest'
+            };
+
+            Plotly.newPlot(chartContainer, traces, layout);
+
+            // Handle Click Events
+            chartContainer.on('plotly_click', function (data) {
+                const point = data.points[0];
+                const meta = point.customdata;
+                showDetails(meta.numFrames, meta.numBlocks, meta.sceneName);
+            });
+
+            // Hide details initially when switching scenes
+            selectionDetails.classList.add('hidden');
+        }
+
+        function showDetails(numFrames, numBlocks, sceneName) {
+            const results = currentScene.results;
+            const data = results[numFrames][numBlocks];
+
+            selectionTitle.textContent = `Details: ${numFrames} Frames, ${numBlocks} Blocks`;
+            generatedTextDiv.textContent = data.generated_text || "No generated text.";
+
+            // Load Images
+            // Path format: masked_images/{scene_name}/{num_frames}frames_{num_blocks}blocks/frame_{idx:03d}.png
+            maskedImagesDiv.innerHTML = '';
+
+            // We don't know exactly how many frames are there without checking, 
+            // but we know numFrames.
+            // Let's try to load them.
+
+            const dirPath = `masked_images/${sceneName}/${numFrames}frames_${numBlocks}blocks`;
+
+            for (let i = 0; i < numFrames; i++) {
+                const idx = i.toString().padStart(3, '0');
+                const imgPath = `${dirPath}/frame_${idx}.png`;
+
+                const item = document.createElement('div');
+                item.className = 'image-item';
+
+                const img = document.createElement('img');
+                img.src = imgPath;
+                img.alt = `Frame ${i}`;
+                img.onerror = function () { this.style.display = 'none'; }; // Hide if not found
+
+                const span = document.createElement('span');
+                span.textContent = `Frame ${i}`;
+
+                item.appendChild(img);
+                item.appendChild(span);
+                maskedImagesDiv.appendChild(item);
+            }
+
+            selectionDetails.classList.remove('hidden');
+
+            // Scroll to details
+            selectionDetails.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Start
+        init();
+    </script>
+
+</body>
+
+</html>
